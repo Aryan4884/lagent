@@ -42,6 +42,10 @@ class ActionReturn:
     thought: Optional[str] = None
     valid: Optional[ActionValidCode] = ActionValidCode.OPEN
 
+    # NOTE: temp usage
+    def to_json(self):
+        return {}
+
 
 class AgentStatusCode(Enum):
     END = 0  # end of streaming
