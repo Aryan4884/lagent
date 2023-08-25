@@ -70,11 +70,13 @@ def react_parser(string):
     return thought[0], action[0], action_input[0]
 
 def process_system_message(system_message, functions):
-    assert "with a function call to actually excute your step." in system_message
+    # assert "with a function call to actually excute your step." in system_message
     # we find that following ReACT format and merging the thought node and function call node is easier for model to learn to integrate the action input json string in its prediction than learn to predict a json string directly.
-    system_message = system_message.replace("with a function call to actually excute your step.", "with a function call to actually excute your step. Your output should follow this format:\nThought:\nAction\nAction Input:\n")
+    # system_message = system_message.replace("with a function call to actually excute your step.", "with a function call to actually excute your step. Your output should follow this format:\nThought:\nAction\nAction Input:\n")
     # add all the function dicts in the prompt.
-    system_message = system_message + "\nSpecifically, you have access to the following APIs: " + str(functions)
+
+
+    # system_message = system_message + "\nSpecifically, you have access to the following APIs: " + str(functions)
     return system_message
 
 def get_gpu_memory(max_gpus=None):

@@ -4,6 +4,7 @@ import torch
 
 from .base_llm import BaseModel
 from .huggingface import HFTransformerCasualLM
+from lagent.agents.dfs.llama_utils import generate_stream
 
 class ToolLLaMA(HFTransformerCasualLM):
 
@@ -27,7 +28,8 @@ class ToolLLaMA(HFTransformerCasualLM):
         # self.model.resize_token_embeddings(len(self.tokenizer))
         self.model.eval()
 
-    def generate_from_template(self, templates, max_out_len: int, **kwargs):
+    def generate_from_template(self, templates, max_out_len: int, 
+            use_streaming=False, **kwargs):
         """Generate completion from a list of templates.
 
         Args:
@@ -35,15 +37,39 @@ class ToolLLaMA(HFTransformerCasualLM):
             max_out_len (int): The maximum length of the output.
         """
         inputs = self.parse_template(templates)
+        generate = self.streaming_generate if use_streaming else self.generate
         inputs = inputs[:-1] + '\n'
         import time
         start = time.time()
-        response = self.generate(inputs, max_out_len=max_out_len, **kwargs)
+        response = generate(inputs, max_out_len=max_out_len, **kwargs)
         end = time.time()
         print("===== %.2f s ====" % (end - start))
         return response.replace(
             self.template_parser.roles['assistant']['end'].strip(),
             '').strip()
+
+    def streaming_generate(self, inputs, max_out_len, **kwargs):
+        gen_params = {
+            "model": "",
+            "prompt": inputs,
+            "temperature": 0.5,
+            "max_new_tokens": max_out_len,
+            "stop": "</s>",
+            "stop_token_ids": None,
+            "echo": False
+        }
+        outputs = generate_stream(self.model, self.tokenizer, gen_params,
+                 'cuda', 8196, force_generate=True)
+        response = self.return_output(outputs)
+        return response.replace(
+            self.template_parser.roles['assistant']['end'].strip(),
+            '').strip()
+
+    def return_output(self, output_stream):
+        for outputs in output_stream:
+            output_text = outputs["text"]
+            output_text = output_text.strip().split(" ")
+        return " ".join(output_text)
 
     @torch.inference_mode()
     def generate(self, inputs: List[str], max_out_len: int,

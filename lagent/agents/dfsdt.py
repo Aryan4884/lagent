@@ -31,8 +31,13 @@ class ToolBenchProtocol:
 
     def __init__(
         self,
+        FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION=FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION,
+        FORMAT_INSTRUCTIONS_USER_FUNCTION=FORMAT_INSTRUCTIONS_USER_FUNCTION,
+        add_tool=True,
     ) -> None:
-        pass
+        self.FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION = FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION
+        self.FORMAT_INSTRUCTIONS_USER_FUNCTION = FORMAT_INSTRUCTIONS_USER_FUNCTION
+        self.add_tool = add_tool
 
     def set_api_information(self, 
                             query_json,
@@ -58,11 +63,14 @@ class ToolBenchProtocol:
         #     tool_descriptions = self.build_tool_description(data_dict)
         # else:
         data_dict = fetch_api_json(self.tool_root_dir, query_json)
-
+        self.func_list = []; self.functions_str = []
         for k,api_json in enumerate(data_dict["api_list"]):
             standard_tool_name = tool_descriptions[k][0]
             openai_function_json,cate_name, pure_api_name = api_json_to_openai_json(api_json,standard_tool_name)
+            self.func_list.append(openai_function_json['name'])
+            new_function = '{name}: {description}. {name} ALWAYS have this parameters:{parameter}'.format(name=openai_function_json['name'], description=openai_function_json['description'], parameter=openai_function_json['parameters'])
             self.functions.append(openai_function_json)
+            self.functions_str.append(new_function)
 
             self.api_name_reflect[openai_function_json["name"]] = pure_api_name
             self.tool_names.append(standard_tool_name)
@@ -87,22 +95,28 @@ class ToolBenchProtocol:
             }
         }
 
+        finish_func_str = """Finish:If you think you get the result which can answer the task, call this function to give the final answer. Or, if you think you can't handle the task from this status, call this function to restart. Remember: you should ALWAYS call this function at the end of your try, and the final answer is the ONLY part that will be showed to user, so final answer should contain enough information. Finish ALWAYS have this parameters:{'type': 'object', 'properties': {'return_type': {'type': 'string', 'enum': ['give_answer', 'give_up_and_restart']}, 'final_answer': {'type': 'string', 'description': 'The final answer you want to give the user. You should have this field if \"return_type\"==\"give_answer\"'}}, 'required': ['return_type']}"""
+
         self.functions.append(finish_func)
+        self.functions_str.append(finish_func_str)
+        self.functions_str = '\n'.join(self.functions_str)
         self.CALL_MAX_TIME = 3
         self.task_description = f'''You should use functions to help handle the real time user querys. Remember:
         1.ALWAYS call \"Finish\" function at the end of the task. And the final answer should contain enough information to show to the user,If you can't handle the task, or you find that function calls always fail(the function is not valid now), use function Finish->give_up_and_restart.
-        2.Do not use origin tool names, use only subfunctions' names.
-        You have access of the following tools:\n'''
-        
-        unduplicated_reflection = {}
-        for standardize_tool_name, tool_des in tool_descriptions:
-            unduplicated_reflection[standardize_tool_name] = tool_des
+        2.Do not use origin tool names, use only subfunctions' names.'''
+        if self.add_tool:
+            self.task_description += 'You have access of the following tools:\n'
 
-        for k,(standardize_tool_name, tool_des) in enumerate(unduplicated_reflection.items()):
-            striped = tool_des[:512].replace('\n','').strip()
-            if striped == "":
-                striped = "None"
-            self.task_description += f"{k+1}.{standardize_tool_name}: {striped}\n"
+            unduplicated_reflection = {}
+            for standardize_tool_name, tool_des in tool_descriptions:
+                unduplicated_reflection[standardize_tool_name] = tool_des
+
+            for k,(standardize_tool_name, tool_des) in enumerate(unduplicated_reflection.items()):
+                striped = tool_des[:512].replace('\n','').strip()
+                if striped == "":
+                    striped = "None"
+
+                self.task_description += f"{k+1}.{standardize_tool_name}: {striped}\n"
 
         # self.success = 0
 
@@ -199,14 +213,14 @@ class DFSDT(BaseAgent):
             prompt = dict(role=msg['role'], content=content)
             prompts.append(prompt)
 
-        response = self._llm.generate_from_template(prompts, 512, temperature=0.5)
+        response = self._llm.generate_from_template(prompts, 512, use_streaming=True)
         decoded_token_len = len(response)
         # react format prediction
         thought, action, action_input = react_parser(response)
 
         message = {
             "role": "assistant",
-            "content": thought,
+            "content": response,
             "function_call": {
                 "name": action,
                 "arguments": action_input
@@ -479,12 +493,16 @@ class DFSDT(BaseAgent):
         # NOTE there is no io_state for tree_node
         self.tree.root.io_state = deepcopy(action_return)
 
-        system = FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION
-        system = system.replace("{task_description}",
-                                self._protocol.task_description)
+        system = self._protocol.FORMAT_INSTRUCTIONS_SYSTEM_FUNCTION
+        # system = system.replace("{task_description}",
+        #                         self._protocol.task_description)
+        system = system.format(
+            func_str=self._protocol.functions_str,
+            func_list=self._protocol.func_list,
+        )
         self.tree.root.messages.append({"role": "system", "content": system})
 
-        user = FORMAT_INSTRUCTIONS_USER_FUNCTION
+        user = self._protocol.FORMAT_INSTRUCTIONS_USER_FUNCTION
         user = user.replace("{input_description}",
                             self._protocol.input_description)
         self.tree.root.messages.append({"role": "user", "content": user})

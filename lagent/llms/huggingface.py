@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 import torch
 
 from .base_llm import BaseModel
-
+from lagent.agents.dfs.llama_utils import generate_stream
 
 class HFTransformer(BaseModel):
     """Model wrapper around HuggingFace general models.
@@ -117,7 +117,8 @@ class HFTransformer(BaseModel):
 
         return decodeds[0]
 
-    def generate_from_template(self, templates, max_out_len: int, **kwargs):
+    def generate_from_template(self, templates, max_out_len: int, 
+            use_streaming=False, **kwargs):
         """Generate completion from a list of templates.
 
         Args:
@@ -125,10 +126,42 @@ class HFTransformer(BaseModel):
             max_out_len (int): The maximum length of the output.
         """
         inputs = self.parse_template(templates)
-        response = self.generate(inputs, max_out_len=max_out_len, **kwargs)
+        generate = self.streaming_generate if use_streaming else self.generate
+
+        import time
+        start = time.time()
+
+        response = generate(inputs, max_out_len=max_out_len, **kwargs)
+
+        end = time.time()
+        print("===== %.2f s ====" % (end - start))
+
         return response.replace(
             self.template_parser.roles['assistant']['end'].strip(),
             '').strip()
+
+    def streaming_generate(self, inputs, max_out_len, **kwargs):
+        gen_params = {
+            "model": "",
+            "prompt": inputs,
+            "temperature": 0.5,
+            "max_new_tokens": max_out_len,
+            "stop": "</s>",
+            "stop_token_ids": None,
+            "echo": False
+        }
+        outputs = generate_stream(self.model, self.tokenizer, gen_params,
+                 'cuda', 2048)
+        response = self.return_output(outputs)
+        return response.replace(
+            self.template_parser.roles['assistant']['end'].strip(),
+            '').strip()
+
+    def return_output(self, output_stream):
+        for outputs in output_stream:
+            output_text = outputs["text"]
+            output_text = output_text.strip().split(" ")
+        return " ".join(output_text)
 
 
 class HFTransformerCasualLM(HFTransformer):
@@ -136,5 +169,5 @@ class HFTransformerCasualLM(HFTransformer):
     def _load_model(self, path: str, model_kwargs: dict):
         from transformers import AutoModelForCausalLM
         model_kwargs.setdefault('torch_dtype', torch.float16)
-        self.model = AutoModelForCausalLM.from_pretrained(path, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(path, trust_remote_code=True, **model_kwargs)
         self.model.eval()
